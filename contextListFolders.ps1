@@ -112,6 +112,15 @@ $Path = [System.IO.Path]::GetFullPath($Path)
 $script:InteractiveMode = -not $PSBoundParameters.ContainsKey('Depth')
 
 if ($script:InteractiveMode) {
+  # ASCII banner (interactive only)
+  Write-Host ""
+  Write-Host '      /\' -ForegroundColor DarkGreen
+  Write-Host '     /  \     ' -ForegroundColor DarkGreen -NoNewline; Write-Host 'contextListFolders' -ForegroundColor Cyan
+  Write-Host '    /  . \    ' -ForegroundColor DarkGreen -NoNewline; Write-Host 'Directory Scanner' -ForegroundColor Gray
+  Write-Host '   / .  . \  ' -ForegroundColor DarkGreen
+  Write-Host '  /________\ ' -ForegroundColor DarkGreen -NoNewline; Write-Host ' v2.0' -ForegroundColor DarkGray
+  Write-Host ""
+
   $defaultDepth = 1
   while ($true) {
     $prompt = "Enter depth (0-100) [default: $defaultDepth]"
@@ -493,7 +502,8 @@ if ($script:InteractiveMode) {
     }
     'D' {
       Apply-Preset 'Developer'
-      Write-Host "Developer preset applied." -ForegroundColor Magenta
+      Write-Host "Developer preset applied. " -ForegroundColor Magenta -NoNewline
+      Write-Host "(Tip: use [C] then [S] to disable folder sizes for faster scans)" -ForegroundColor DarkGray
     }
     'F' {
       Apply-Preset 'Full'
@@ -542,7 +552,7 @@ if ($script:InteractiveMode) {
     $OutTree = Join-Path $Path "${baseName}_tree.txt"
   }
 
-  Write-Host ""
+  Clear-Host
   Write-Host "Starting scan..." -ForegroundColor Green
 } else {
   # Non-interactive mode: set ShowDirSizes from switch
@@ -575,11 +585,11 @@ function Get-DirectorySize {
     foreach ($f in $dirInfo.EnumerateFiles('*', [System.IO.SearchOption]::AllDirectories)) {
       try { $total += $f.Length } catch { }
       $fileCount++
-      if ($fileCount % 500 -eq 0) {
+      if ($fileCount % 1000 -eq 0) {
         Write-Progress -Id 1 -Activity "Calculating size: $dirName" -Status "$fileCount files  ($(Format-Size $total))"
       }
     }
-    if ($fileCount -ge 500) {
+    if ($fileCount -ge 1000) {
       Write-Progress -Id 1 -Activity "Calculating size" -Completed
     }
     return $total
@@ -680,38 +690,7 @@ $items.Add($rootObj) | Out-Null
 $treeLines.Add([pscustomobject]@{ Text = $rootDisplayName; IsDir = $rootInfo.PSIsContainer }) | Out-Null
 
 # ============================================================================
-# PASS 1: Quick count of items for progress percentage
-# ============================================================================
-$script:TotalExpected = 0
-
-function Count-Children {
-  param([string]$Directory, [int]$Level, [int]$MaxDepth)
-  if ($Level -ge $MaxDepth) { return }
-  $children = @(Get-ChildSafe -Path $Directory -IncludeHidden:$IncludeHidden)
-  foreach ($child in $children) {
-    if (-not $child.PSIsContainer -and -not $IncludeFiles) { continue }
-    if (-not $IncludeHidden) {
-      if ($child.Attributes -band [IO.FileAttributes]::Hidden) { continue }
-      if ($child.Attributes -band [IO.FileAttributes]::System) { continue }
-    }
-    if ($child.PSIsContainer -and $Exclude) {
-      $n = $child.Name; if ($Exclude | Where-Object { $n -like $_ }) { continue }
-    }
-    if (-not $child.PSIsContainer) {
-      if (-not (Test-MatchFilters -Item $child -Include $Include -Exclude $Exclude -Extensions $Extensions)) { continue }
-    }
-    $script:TotalExpected++
-    if ($child.PSIsContainer) { Count-Children -Directory $child.FullName -Level ($Level + 1) -MaxDepth $MaxDepth }
-  }
-}
-
-Write-Progress -Id 0 -Activity "Scanning $rootDisplayName" -Status "Counting items..."
-if ($rootInfo.PSIsContainer) {
-  Count-Children -Directory $rootPath -Level 0 -MaxDepth $Depth
-}
-
-# ============================================================================
-# PASS 2: Full tree walk with percentage + ETA progress
+# TREE WALK with elapsed-time progress (single pass — no pre-count)
 # ============================================================================
 $script:ProgressCount = 0
 $script:ScanStartTime = [System.Diagnostics.Stopwatch]::StartNew()
@@ -750,25 +729,18 @@ function Add-Children {
     $isLast = ($i -eq $children.Count - 1)
 
     $script:ProgressCount++
-    # Update progress bar with percentage and ETA
-    if ($script:ProgressCount % 5 -eq 0 -or $child.PSIsContainer) {
-      $pct = if ($script:TotalExpected -gt 0) { [Math]::Min(100, [int](($script:ProgressCount / $script:TotalExpected) * 100)) } else { -1 }
+    # Update progress bar with elapsed time (no fake ETA)
+    if ($script:ProgressCount % 10 -eq 0 -or $child.PSIsContainer) {
       $elapsed = $script:ScanStartTime.Elapsed
-      $eta = ''
-      if ($pct -gt 0 -and $elapsed.TotalSeconds -gt 1) {
-        $remaining = [TimeSpan]::FromSeconds(($elapsed.TotalSeconds / $pct) * (100 - $pct))
-        if ($remaining.TotalHours -ge 1) {
-          $eta = ' | ETA: {0:0}h {1:0}m' -f $remaining.TotalHours, $remaining.Minutes
-        } elseif ($remaining.TotalMinutes -ge 1) {
-          $eta = ' | ETA: {0:0}m {1:0}s' -f [Math]::Floor($remaining.TotalMinutes), $remaining.Seconds
-        } else {
-          $eta = ' | ETA: {0:0}s' -f $remaining.TotalSeconds
-        }
+      $elapsedStr = if ($elapsed.TotalHours -ge 1) {
+        '{0:0}h {1:0}m' -f [Math]::Floor($elapsed.TotalHours), $elapsed.Minutes
+      } elseif ($elapsed.TotalMinutes -ge 1) {
+        '{0:0}m {1:0}s' -f [Math]::Floor($elapsed.TotalMinutes), $elapsed.Seconds
+      } else {
+        '{0:0}s' -f [Math]::Floor($elapsed.TotalSeconds)
       }
-      $status = "$($script:ProgressCount) / $($script:TotalExpected) items$eta"
-      $progressParams = @{ Id = 0; Activity = "Scanning $rootDisplayName"; Status = $status; CurrentOperation = $child.Name }
-      if ($pct -ge 0) { $progressParams.PercentComplete = $pct }
-      Write-Progress @progressParams
+      $status = "$($script:ProgressCount) items | ${elapsedStr} elapsed"
+      Write-Progress -Id 0 -Activity "Scanning $rootDisplayName" -Status $status -CurrentOperation $child.Name -PercentComplete -1
     }
 
     $childSize = if ($child.PSIsContainer) {
