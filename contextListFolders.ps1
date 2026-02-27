@@ -95,6 +95,14 @@ $ErrorActionPreference = 'Stop'
 # ============================================================================
 # PATH NORMALIZATION (handle drive roots like C:\ safely)
 # ============================================================================
+# Strip characters illegal in Windows paths (quotes, angle brackets, etc.)
+$Path = $Path -replace '["><\|]', ''
+$Path = $Path.Trim()
+# Bare drive letter (e.g. "C:") -> add backslash
+if ($Path -match '^[A-Za-z]:$') { $Path = "${Path}\" }
+# Fallback if empty
+if ([string]::IsNullOrWhiteSpace($Path)) { $Path = (Get-Location).Path }
+# Normalize through .NET
 $Path = [System.IO.Path]::GetFullPath($Path)
 
 # ============================================================================
@@ -103,6 +111,22 @@ $Path = [System.IO.Path]::GetFullPath($Path)
 $script:InteractiveMode = -not $PSBoundParameters.ContainsKey('Depth')
 
 if ($script:InteractiveMode) {
+  # Path selection
+  Write-Host ""
+  Write-Host "Current path: " -NoNewline -ForegroundColor Gray
+  Write-Host $Path -ForegroundColor Green
+  $pathInput = Read-Host "Enter a new path or press Enter to keep current"
+  if (-not [string]::IsNullOrWhiteSpace($pathInput)) {
+    $pathInput = $pathInput -replace '["><\|]', ''
+    $pathInput = $pathInput.Trim().Trim('"').Trim("'")
+    if ($pathInput -match '^[A-Za-z]:$') { $pathInput = "${pathInput}\" }
+    if (Test-Path -LiteralPath $pathInput) {
+      $Path = [System.IO.Path]::GetFullPath($pathInput)
+    } else {
+      Write-Host "Path not found: $pathInput — using current path." -ForegroundColor Yellow
+    }
+  }
+
   $defaultDepth = 1
   while ($true) {
     $prompt = "Enter depth (0-100) [default: $defaultDepth]"
@@ -319,6 +343,16 @@ if ($script:InteractiveMode) {
     Write-Host -NoNewline (Pad "" 14)
     Write-Host $v -ForegroundColor DarkCyan
 
+    # Change path option
+    Write-Host -NoNewline $v -ForegroundColor DarkCyan
+    Write-Host -NoNewline "  [" -ForegroundColor White
+    Write-Host -NoNewline "P" -ForegroundColor Magenta
+    Write-Host -NoNewline "] Change path        : " -ForegroundColor Gray
+    $pathDisplay = $Path
+    if ($pathDisplay.Length -gt 32) { $pathDisplay = "..." + $pathDisplay.Substring($pathDisplay.Length - 29) }
+    Write-Host -NoNewline (Pad $pathDisplay 34) -ForegroundColor Green
+    Write-Host $v -ForegroundColor DarkCyan
+
     # Footer separator
     Write-Host ($lj + ($h * ($w - 2)) + $rj) -ForegroundColor DarkCyan
 
@@ -412,6 +446,21 @@ if ($script:InteractiveMode) {
           '0' { $script:Config.ExportTree = -not $script:Config.ExportTree }
           'D' { Apply-Preset 'Developer' }
           'F' { Apply-Preset 'Full' }
+          'P' {
+            Write-Host ""
+            $newPath = Read-Host "Enter new path (e.g., C:\Projects)"
+            if (-not [string]::IsNullOrWhiteSpace($newPath)) {
+              $newPath = $newPath -replace '["><\|]', ''
+              $newPath = $newPath.Trim().Trim('"').Trim("'")
+              if ($newPath -match '^[A-Za-z]:$') { $newPath = "${newPath}\" }
+              if (Test-Path -LiteralPath $newPath) {
+                $Path = [System.IO.Path]::GetFullPath($newPath)
+                Write-Host "Path changed to: $Path" -ForegroundColor Green
+              } else {
+                Write-Host "Path not found: $newPath" -ForegroundColor Red
+              }
+            }
+          }
           'Q' {
             $menuActive = $false
             $runScan = $false
