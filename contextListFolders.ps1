@@ -86,6 +86,7 @@ param(
   [string]$MarkdownPath,
   [switch]$MarkdownTimestamp,
 
+  [switch]$NoDirSizes,
   [switch]$PassThru
 )
 
@@ -111,22 +112,6 @@ $Path = [System.IO.Path]::GetFullPath($Path)
 $script:InteractiveMode = -not $PSBoundParameters.ContainsKey('Depth')
 
 if ($script:InteractiveMode) {
-  # Path selection
-  Write-Host ""
-  Write-Host "Current path: " -NoNewline -ForegroundColor Gray
-  Write-Host $Path -ForegroundColor Green
-  $pathInput = Read-Host "Enter a new path or press Enter to keep current"
-  if (-not [string]::IsNullOrWhiteSpace($pathInput)) {
-    $pathInput = $pathInput -replace '["><\|]', ''
-    $pathInput = $pathInput.Trim().Trim('"').Trim("'")
-    if ($pathInput -match '^[A-Za-z]:$') { $pathInput = "${pathInput}\" }
-    if (Test-Path -LiteralPath $pathInput) {
-      $Path = [System.IO.Path]::GetFullPath($pathInput)
-    } else {
-      Write-Host "Path not found: $pathInput — using current path." -ForegroundColor Yellow
-    }
-  }
-
   $defaultDepth = 1
   while ($true) {
     $prompt = "Enter depth (0-100) [default: $defaultDepth]"
@@ -154,6 +139,7 @@ if ($script:InteractiveMode) {
     IncludeFiles  = $true
     IncludeHidden = $false
     UseAscii      = $false
+    ShowDirSizes  = $true
     Extensions    = @()
     Exclude       = @()
     ExportMD      = $false
@@ -251,6 +237,15 @@ if ($script:InteractiveMode) {
     Write-Host -NoNewline "4" -ForegroundColor Yellow
     Write-Host -NoNewline "] Use ASCII          : " -ForegroundColor Gray
     Write-Host -NoNewline (Pad $val4 34) -ForegroundColor Yellow
+    Write-Host $v -ForegroundColor DarkCyan
+
+    # Option S: Show Dir Sizes
+    $valS = if ($script:Config.ShowDirSizes) { "Yes" } else { "No" }
+    Write-Host -NoNewline $v -ForegroundColor DarkCyan
+    Write-Host -NoNewline "  [" -ForegroundColor White
+    Write-Host -NoNewline "S" -ForegroundColor Yellow
+    Write-Host -NoNewline "] Folder Sizes       : " -ForegroundColor Gray
+    Write-Host -NoNewline (Pad $valS 34) -ForegroundColor Yellow
     Write-Host $v -ForegroundColor DarkCyan
 
     # Empty line
@@ -390,16 +385,38 @@ if ($script:InteractiveMode) {
   # ===========================================================================
   # MODE SELECTION PROMPT
   # ===========================================================================
-  Write-Host ""
-  Write-Host "How would you like to proceed?" -ForegroundColor Cyan
-  Write-Host "  [" -NoNewline; Write-Host "Enter" -ForegroundColor Green -NoNewline; Write-Host "] Quick scan (defaults)"
-  Write-Host "  [" -NoNewline; Write-Host "C" -ForegroundColor Yellow -NoNewline; Write-Host "]     Customize options"
-  Write-Host "  [" -NoNewline; Write-Host "D" -ForegroundColor Magenta -NoNewline; Write-Host "]     Developer preset (excludes node_modules, .git, etc.)"
-  Write-Host "  [" -NoNewline; Write-Host "F" -ForegroundColor Magenta -NoNewline; Write-Host "]     Full export (all formats, auto-named)"
-  Write-Host ""
-  $modeChoice = Read-Host "Choice"
-
   $runScan = $true
+  $modeChoice = ''
+
+  :modeMenu while ($true) {
+    Write-Host ""
+    Write-Host "How would you like to proceed?" -ForegroundColor Cyan
+    Write-Host "  [" -NoNewline; Write-Host "Enter" -ForegroundColor Green -NoNewline; Write-Host "] Quick scan (defaults)"
+    Write-Host "  [" -NoNewline; Write-Host "P" -ForegroundColor Yellow -NoNewline; Write-Host "]     Change path (current: " -NoNewline; Write-Host $Path -ForegroundColor Green -NoNewline; Write-Host ")"
+    Write-Host "  [" -NoNewline; Write-Host "C" -ForegroundColor Yellow -NoNewline; Write-Host "]     Customize options"
+    Write-Host "  [" -NoNewline; Write-Host "D" -ForegroundColor Magenta -NoNewline; Write-Host "]     Developer preset (excludes node_modules, .git, etc.)"
+    Write-Host "  [" -NoNewline; Write-Host "F" -ForegroundColor Magenta -NoNewline; Write-Host "]     Full export (all formats, auto-named)"
+    Write-Host ""
+    $modeChoice = Read-Host "Choice"
+
+    if ($modeChoice.ToUpper() -eq 'P') {
+      Write-Host ""
+      $pathInput = Read-Host "Enter new path (e.g., C:\Projects)"
+      if (-not [string]::IsNullOrWhiteSpace($pathInput)) {
+        $pathInput = $pathInput -replace '["><\|]', ''
+        $pathInput = $pathInput.Trim().Trim('"').Trim("'")
+        if ($pathInput -match '^[A-Za-z]:$') { $pathInput = "${pathInput}\" }
+        if (Test-Path -LiteralPath $pathInput) {
+          $Path = [System.IO.Path]::GetFullPath($pathInput)
+          Write-Host "Path changed to: $Path" -ForegroundColor Green
+        } else {
+          Write-Host "Path not found: $pathInput" -ForegroundColor Red
+        }
+      }
+      continue modeMenu
+    }
+    break modeMenu
+  }
 
   switch ($modeChoice.ToUpper()) {
     'C' {
@@ -420,6 +437,7 @@ if ($script:InteractiveMode) {
           '2' { $script:Config.IncludeFiles = -not $script:Config.IncludeFiles }
           '3' { $script:Config.IncludeHidden = -not $script:Config.IncludeHidden }
           '4' { $script:Config.UseAscii = -not $script:Config.UseAscii }
+          'S' { $script:Config.ShowDirSizes = -not $script:Config.ShowDirSizes }
           '5' {
             Write-Host ""
             $extInput = Read-Host "Enter extensions (e.g., .py,.md,.txt) or empty to clear"
@@ -497,12 +515,13 @@ if ($script:InteractiveMode) {
   # ===========================================================================
   # APPLY CONFIG TO SCRIPT PARAMETERS
   # ===========================================================================
-  $Output        = $script:Config.Output
-  $IncludeFiles  = $script:Config.IncludeFiles
-  $IncludeHidden = $script:Config.IncludeHidden
-  $UseAscii      = $script:Config.UseAscii
-  $Extensions    = $script:Config.Extensions
-  $Exclude       = $script:Config.Exclude
+  $Output              = $script:Config.Output
+  $IncludeFiles        = $script:Config.IncludeFiles
+  $IncludeHidden       = $script:Config.IncludeHidden
+  $UseAscii            = $script:Config.UseAscii
+  $script:ShowDirSizes = $script:Config.ShowDirSizes
+  $Extensions          = $script:Config.Extensions
+  $Exclude             = $script:Config.Exclude
 
   # Generate auto-named export paths
   $folderName = Split-Path -Leaf $Path
@@ -525,6 +544,9 @@ if ($script:InteractiveMode) {
 
   Write-Host ""
   Write-Host "Starting scan..." -ForegroundColor Green
+} else {
+  # Non-interactive mode: set ShowDirSizes from switch
+  $script:ShowDirSizes = -not $NoDirSizes
 }
 
 function Write-VerboseLine {
@@ -546,9 +568,19 @@ function Format-Size {
 function Get-DirectorySize {
   param([string]$DirPath)
   try {
-    $total = 0
-    foreach ($f in [System.IO.Directory]::EnumerateFiles($DirPath, '*', [System.IO.SearchOption]::AllDirectories)) {
-      try { $total += (New-Object System.IO.FileInfo $f).Length } catch { }
+    $dirInfo = New-Object System.IO.DirectoryInfo $DirPath
+    $total = [long]0
+    $fileCount = 0
+    $dirName = Split-Path -Leaf $DirPath
+    foreach ($f in $dirInfo.EnumerateFiles('*', [System.IO.SearchOption]::AllDirectories)) {
+      try { $total += $f.Length } catch { }
+      $fileCount++
+      if ($fileCount % 500 -eq 0) {
+        Write-Progress -Id 1 -Activity "Calculating size: $dirName" -Status "$fileCount files  ($(Format-Size $total))"
+      }
+    }
+    if ($fileCount -ge 500) {
+      Write-Progress -Id 1 -Activity "Calculating size" -Completed
     }
     return $total
   } catch {
@@ -647,6 +679,43 @@ $rootObj = [pscustomobject]@{
 $items.Add($rootObj) | Out-Null
 $treeLines.Add([pscustomobject]@{ Text = $rootDisplayName; IsDir = $rootInfo.PSIsContainer }) | Out-Null
 
+# ============================================================================
+# PASS 1: Quick count of items for progress percentage
+# ============================================================================
+$script:TotalExpected = 0
+
+function Count-Children {
+  param([string]$Directory, [int]$Level, [int]$MaxDepth)
+  if ($Level -ge $MaxDepth) { return }
+  $children = @(Get-ChildSafe -Path $Directory -IncludeHidden:$IncludeHidden)
+  foreach ($child in $children) {
+    if (-not $child.PSIsContainer -and -not $IncludeFiles) { continue }
+    if (-not $IncludeHidden) {
+      if ($child.Attributes -band [IO.FileAttributes]::Hidden) { continue }
+      if ($child.Attributes -band [IO.FileAttributes]::System) { continue }
+    }
+    if ($child.PSIsContainer -and $Exclude) {
+      $n = $child.Name; if ($Exclude | Where-Object { $n -like $_ }) { continue }
+    }
+    if (-not $child.PSIsContainer) {
+      if (-not (Test-MatchFilters -Item $child -Include $Include -Exclude $Exclude -Extensions $Extensions)) { continue }
+    }
+    $script:TotalExpected++
+    if ($child.PSIsContainer) { Count-Children -Directory $child.FullName -Level ($Level + 1) -MaxDepth $MaxDepth }
+  }
+}
+
+Write-Progress -Id 0 -Activity "Scanning $rootDisplayName" -Status "Counting items..."
+if ($rootInfo.PSIsContainer) {
+  Count-Children -Directory $rootPath -Level 0 -MaxDepth $Depth
+}
+
+# ============================================================================
+# PASS 2: Full tree walk with percentage + ETA progress
+# ============================================================================
+$script:ProgressCount = 0
+$script:ScanStartTime = [System.Diagnostics.Stopwatch]::StartNew()
+
 function Add-Children {
   param(
     [string]$Directory,
@@ -667,13 +736,11 @@ function Add-Children {
       if ($_.Attributes -band [IO.FileAttributes]::System) { return $false }
     }
     if ($_.PSIsContainer) {
-      # For directories, apply only Exclude patterns (and always keep for traversal)
       if ($Exclude) {
         $n = $_.Name; if ($Exclude | Where-Object { $n -like $_ }) { return $false }
       }
       return $true
     } else {
-      # For files, apply full filter set
       return (Test-MatchFilters -Item $_ -Include $Include -Exclude $Exclude -Extensions $Extensions)
     }
   } | Sort-Object @{Expression = { -not $_.PSIsContainer }}, Name)
@@ -682,7 +749,31 @@ function Add-Children {
     $child = $children[$i]
     $isLast = ($i -eq $children.Count - 1)
 
-    $childSize = if ($child.PSIsContainer) { Get-DirectorySize $child.FullName } else { $child.Length }
+    $script:ProgressCount++
+    # Update progress bar with percentage and ETA
+    if ($script:ProgressCount % 5 -eq 0 -or $child.PSIsContainer) {
+      $pct = if ($script:TotalExpected -gt 0) { [Math]::Min(100, [int](($script:ProgressCount / $script:TotalExpected) * 100)) } else { -1 }
+      $elapsed = $script:ScanStartTime.Elapsed
+      $eta = ''
+      if ($pct -gt 0 -and $elapsed.TotalSeconds -gt 1) {
+        $remaining = [TimeSpan]::FromSeconds(($elapsed.TotalSeconds / $pct) * (100 - $pct))
+        if ($remaining.TotalHours -ge 1) {
+          $eta = ' | ETA: {0:0}h {1:0}m' -f $remaining.TotalHours, $remaining.Minutes
+        } elseif ($remaining.TotalMinutes -ge 1) {
+          $eta = ' | ETA: {0:0}m {1:0}s' -f [Math]::Floor($remaining.TotalMinutes), $remaining.Seconds
+        } else {
+          $eta = ' | ETA: {0:0}s' -f $remaining.TotalSeconds
+        }
+      }
+      $status = "$($script:ProgressCount) / $($script:TotalExpected) items$eta"
+      $progressParams = @{ Id = 0; Activity = "Scanning $rootDisplayName"; Status = $status; CurrentOperation = $child.Name }
+      if ($pct -ge 0) { $progressParams.PercentComplete = $pct }
+      Write-Progress @progressParams
+    }
+
+    $childSize = if ($child.PSIsContainer) {
+      if ($script:ShowDirSizes) { Get-DirectorySize $child.FullName } else { $null }
+    } else { $child.Length }
     $rel = Join-RelativePath -Root $rootPath -Full $child.FullName
 
     $obj = [pscustomobject]@{
@@ -708,7 +799,7 @@ function Add-Children {
     }
     $connector = if ($isLast) { $TreeChars.Last } else { $TreeChars.Tee }
 
-    $sizeText = '  ' + (Format-Size $childSize)
+    $sizeText = if ($null -ne $childSize) { '  ' + (Format-Size $childSize) } else { '' }
     $treeLines.Add([pscustomobject]@{ Text = ($prefix + $connector + $child.Name + $sizeText); IsDir = $child.PSIsContainer }) | Out-Null
 
     if ($child.PSIsContainer) {
@@ -723,6 +814,8 @@ function Add-Children {
 if ($rootInfo.PSIsContainer) {
   Add-Children -Directory $rootPath -Level 0 -MaxDepth $Depth -PrefixParts @()
 }
+Write-Progress -Id 0 -Activity "Scanning" -Completed
+Write-Progress -Id 1 -Activity "Calculating size" -Completed
 
 # Build header for console/markdown
 $context = [pscustomobject]@{
