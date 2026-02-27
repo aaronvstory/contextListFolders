@@ -93,6 +93,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ============================================================================
+# PATH NORMALIZATION (handle drive roots like C:\ safely)
+# ============================================================================
+$Path = [System.IO.Path]::GetFullPath($Path)
+
+# ============================================================================
 # INTERACTIVE MODE DETECTION
 # ============================================================================
 $script:InteractiveMode = -not $PSBoundParameters.ContainsKey('Depth')
