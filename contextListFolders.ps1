@@ -543,6 +543,19 @@ function Format-Size {
   return ('{0:N2} {1}' -f $num, $sizes[$i])
 }
 
+function Get-DirectorySize {
+  param([string]$DirPath)
+  try {
+    $total = 0
+    foreach ($f in [System.IO.Directory]::EnumerateFiles($DirPath, '*', [System.IO.SearchOption]::AllDirectories)) {
+      try { $total += (New-Object System.IO.FileInfo $f).Length } catch { }
+    }
+    return $total
+  } catch {
+    return 0
+  }
+}
+
 function Join-RelativePath {
   param(
     [string]$Root,
@@ -613,7 +626,7 @@ $rootPath = $rootInfo.FullName
 
 # Collect items and also build a pretty tree
 $items = New-Object System.Collections.Generic.List[object]
-$treeLines = New-Object System.Collections.Generic.List[string]
+$treeLines = New-Object System.Collections.Generic.List[object]
 $rootSize = if ($rootInfo.PSIsContainer) { $null } else { $rootInfo.Length }
 $rootDisplayName = $rootInfo.Name
 if ([string]::IsNullOrEmpty($rootDisplayName)) { $rootDisplayName = $rootPath.TrimEnd('\', '/') }
@@ -632,7 +645,7 @@ $rootObj = [pscustomobject]@{
   Attributes    = $rootInfo.Attributes.ToString()
 }
 $items.Add($rootObj) | Out-Null
-$treeLines.Add($rootDisplayName) | Out-Null
+$treeLines.Add([pscustomobject]@{ Text = $rootDisplayName; IsDir = $rootInfo.PSIsContainer }) | Out-Null
 
 function Add-Children {
   param(
@@ -669,7 +682,7 @@ function Add-Children {
     $child = $children[$i]
     $isLast = ($i -eq $children.Count - 1)
 
-    $childSize = if ($child.PSIsContainer) { $null } else { $child.Length }
+    $childSize = if ($child.PSIsContainer) { Get-DirectorySize $child.FullName } else { $child.Length }
     $rel = Join-RelativePath -Root $rootPath -Full $child.FullName
 
     $obj = [pscustomobject]@{
@@ -679,7 +692,7 @@ function Add-Children {
       RelativePath  = $rel
       Level         = $Level + 1
       SizeBytes     = $childSize
-      Size          = if ($null -ne $childSize) { Format-Size $childSize } else { '' }
+      Size          = Format-Size $childSize
       Extension     = [System.IO.Path]::GetExtension($child.Name)
       IsHidden      = [bool]($child.Attributes -band [IO.FileAttributes]::Hidden)
       LastWriteTime = $child.LastWriteTime
@@ -695,8 +708,8 @@ function Add-Children {
     }
     $connector = if ($isLast) { $TreeChars.Last } else { $TreeChars.Tee }
 
-    $sizeText = if ($child.PSIsContainer) { '' } else { '  ' + (Format-Size $child.Length) }
-    $treeLines.Add($prefix + $connector + $child.Name + $sizeText) | Out-Null
+    $sizeText = '  ' + (Format-Size $childSize)
+    $treeLines.Add([pscustomobject]@{ Text = ($prefix + $connector + $child.Name + $sizeText); IsDir = $child.PSIsContainer }) | Out-Null
 
     if ($child.PSIsContainer) {
       $nextPrefixParts = @()
@@ -728,7 +741,10 @@ switch ($Output) {
   'Tree' {
     Write-Host ("Folder Path: {0}" -f $context.RootPath)
     Write-Host ("Depth: {0}" -f $context.Depth)
-    $treeLines | ForEach-Object { Write-Host $_ }
+    foreach ($line in $treeLines) {
+      $color = if ($line.IsDir) { 'Cyan' } else { 'Gray' }
+      Write-Host $line.Text -ForegroundColor $color
+    }
     Write-Host ("`nSummary: {0} items ({1} dirs, {2} files)" -f $context.ItemCount, $context.DirCount, $context.FileCount)
   }
   'List' {
@@ -751,7 +767,8 @@ if ($OutTree) {
     "Depth: $($context.Depth)",
     ''
   )
-  Set-Content -LiteralPath $OutTree -Value ($header + $treeLines) -Encoding UTF8
+  $plainLines = $treeLines | ForEach-Object { $_.Text }
+  Set-Content -LiteralPath $OutTree -Value ($header + $plainLines) -Encoding UTF8
 }
 
 if ($MarkdownPath) {
@@ -764,7 +781,7 @@ if ($MarkdownPath) {
   $md += ("- Items: {0} (Dirs: {1}, Files: {2})" -f $context.ItemCount, $context.DirCount, $context.FileCount)
   $md += ''
   $md += '```text'
-  $md += $treeLines
+  $md += ($treeLines | ForEach-Object { $_.Text })
   $md += '```'
   $md += ''
   $md += '## Data Schema'
